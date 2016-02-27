@@ -1,10 +1,8 @@
 library(Rsamtools)
 library(VariantAnnotation)
-library(SomaticSignatures)
 library(BSgenome.Hsapiens.UCSC.hg19)
+library(myvariant)
 
-###############################################################################
-## Functions
 pileupFreq <- function(pileupres) {
   nucleotides <- levels(pileupres$nucleotide)
   res <- split(pileupres, pileupres$seqnames)
@@ -44,7 +42,7 @@ checkCoverage <- function(bamfile, chr, pos) {
                          min_mapq=0,
                          min_base_quality=0,
                          min_minor_allele_depth=0
-                         )
+  )
   res <- pileup(bf, scanBamParam=param, pileupParam=p_param)
   if (dim(res)[1]==0) {
     res <- rbind(res, data.frame(seqnames=chr,
@@ -52,8 +50,8 @@ checkCoverage <- function(bamfile, chr, pos) {
                                  nucleotide=NA,
                                  count=0,
                                  which_label=paste(chr,":",pos,"-",pos, sep='')
-                                 )
-                 )
+    )
+    )
     return(res)
   } else {
     return(res)
@@ -74,55 +72,49 @@ pertNeg <- function(vcf, bam) {
   return(pres)
 }
 
-#compute b allele frequency for given position
-ballelfreq <- function(bam, chr, pos) {
-  ref <- as.vector(as.vector(getSeq(Hsapiens, chr, pos, pos)))
-  res <- pileupFreq(checkCoverage(bam, chr, pos))
-  covalt <- (res$A + res$C + res$G + res$T) - res[[ref]]
-  baf <- covalt / (covalt + res[[ref]])
-  return(baf)
+getCosmic <- function(n=1000){
+  cosmic <- list()
+  i <- 0
+  while (i < n){
+    q <- queryVariant(q="_exists_:cosmic AND _exists_:cadd", fields="vcf", skip=i, size=i+1000)
+    i <- i + 1000}
+  
+  cosmic <- c(q, cosmic)
+  return(cosmic)
 }
 
-###############################################################################
-
-# get the bam files
-bamfile1 <- "/home/tobias/AWS/storage/t47d_rna/variants/T47D-100ng_S7/merged.conv.sort.rd.split.realigned.recal.bam"
-bamfile2 <- "/home/tobias/AWS/storage/t47d_rna/variants/T47D-400ng_S8/merged.conv.sort.rd.split.realigned.recal.bam"
-bf1 <- BamFile(bamfile1)
-bf2 <- BamFile(bamfile2)
-
-# get the vcf files
-vcf1 <- readVcf("/home/tobias/AWS/storage/t47d_rna/variants/T47D-100ng_S7/T47D-100ng_S7_final_variants_sort.vcf.gz", "hg19")
-vcf2 <- readVcf("/home/tobias/AWS/storage/t47d_rna/variants/T47D-400ng_S8/T47D-400ng_S8_final_variants_sort.vcf.gz", "hg19")
-
-# only SNVs
-vcf1.filt <- vcf1[which(ranges(vcf1)@width==1), ]
-vcf2.filt <- vcf2[which(ranges(vcf2)@width==1), ]
-
-# FFPE hard filter, >=50% AF fo C>T / G>A
-vcf1.filt <- filtVcfFfpe(vcf1.filt)
-vcf2.filt <- filtVcfFfpe(vcf2.filt)
-
-diff1v2 <- setdiff(rowRanges(vcf1.filt), rowRanges(vcf2.filt))
-diff2v1 <- setdiff(rowRanges(vcf2.filt), rowRanges(vcf1.filt))
-common <- intersect(rowRanges(vcf1.filt), rowRanges(vcf2.filt))
-
-# variants present in replicate 1, but not in replicare 2 ...
-x1 <- pertNeg(diff1v2, bamfile2)
-depthSample2 <- rowSums(x1[,c(3,4,5,6)])
-table(is.na(depthSample2) | depthSample2==1 | depthSample2==2) / length(depthSample2) * 100
-
-# variants present in replicate 2, but not in replicare 1 ...
-x2 <- pertNeg(diff2v1, bamfile1)
-depthSample1 <- rowSums(x2[,c(3,4,5,6)])
-table(is.na(depthSample1) | depthSample1==1 | depthSample1==2) / length(depthSample1) * 100
-
-#################################
-# compute b allel freq for vcf1
-tab <- data.frame(pos=as.numeric(start(vcf1)), 
-                  chr=as.vector(seqnames(vcf1)))
-
-bfrq1 <- apply(tab, 1, function(x) {
-  ballelfreq(bamfile1, x['chr'], as.numeric(x['pos']))
-})
+# bed to granges
+# function from: http://davetang.org/muse/2015/02/04/bed-granges/
+bed_to_granges <- function(file){
+  df <- read.table(file,
+                   header=F,
+                   stringsAsFactors=F)
   
+  if(length(df) > 6){
+    df <- df[,-c(7:length(df))]
+  }
+  
+  if(length(df)<3){
+    stop("File has less than 3 columns")
+  }
+  
+  header <- c('chr','start','end','id','score','strand')
+  names(df) <- header[1:length(names(df))]
+  
+  if('strand' %in% colnames(df)){
+    df$strand <- gsub(pattern="[^+-]+", replacement = '*', x = df$strand)
+  }
+  
+  library("GenomicRanges")
+  
+  if(length(df)==3){
+    gr <- with(df, GRanges(chr, IRanges(start, end)))
+  } else if (length(df)==4){
+    gr <- with(df, GRanges(chr, IRanges(start, end), id=id))
+  } else if (length(df)==5){
+    gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score))
+  } else if (length(df)==6){
+    gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score, strand=strand))
+  }
+  return(gr)
+}
